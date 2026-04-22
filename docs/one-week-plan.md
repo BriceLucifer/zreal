@@ -1,6 +1,6 @@
 # zreal — One Week Build Plan
 
-Build a working game engine and a playable demo in 7 days. Each day has clear deliverables and a "done when" checkpoint. The demo target: a simple 3D scene where you can move a player, collide with objects, and see textured geometry — running natively on macOS.
+Build a working game engine and a playable demo in 7 days. Each day has clear deliverables and a "done when" checkpoint. The demo target: a simple 3D scene where you can move a player, collide with objects, and see textured geometry — **running in the browser via WASM + WebGL2**, with optional native desktop support.
 
 > **Scope rule**: If something takes longer than expected, cut scope on that task and move forward. A running demo with fewer features beats a perfect engine that never runs.
 
@@ -52,77 +52,102 @@ zig build test   # all tests pass
 
 ---
 
-## Day 2 (Tue): Platform Layer — Window + Input
+## Day 2 (Tue): Platform Layer — WASM Bridge + Input
 
-**Goal**: A native window opens on macOS with keyboard/mouse input.
+**Goal**: Engine runs in the browser. A canvas displays, keyboard/mouse input works via JS→WASM bridge.
 
 ### Tasks
 
-- [ ] **2.1** Create `src/platform/macos.zig` — macOS window via Objective-C runtime
-  - Import `objc_msgSend` from `libobjc`
-  - Create `NSApplication`, `NSWindow`
-  - Set window title, size, and make it visible
-  - See guide: [Chapter 5 — macOS (Cocoa)](game-engine-guide.md#macos-cocoa--appkit)
+- [ ] **2.1** Create `src/platform/web.zig` — WASM ↔ JS bridge
+  - `extern "env"` declarations for JS-provided functions:
+    - `jsCanvasWidth()`, `jsCanvasHeight()`
+    - `jsGlClearColor(r, g, b, a)`, `jsGlClear(mask)`
+    - `jsLog(ptr, len)` — for debug logging
+  - `export fn` for JS to call:
+    - `init()` — engine initialization
+    - `update(dt: f32)` — called each frame from `requestAnimationFrame`
+    - `onKeyDown(keycode: u32)`, `onKeyUp(keycode: u32)`
+    - `onMouseMove(dx: f32, dy: f32)`
 
-- [ ] **2.2** Create `src/platform/platform.zig` — cross-platform interface
-  - `Platform.init(width, height, title)` → opens window
-  - `Platform.pollEvents()` → returns `Event` union (key_down, key_up, mouse_move, window_close, window_resize)
-  - `Platform.shouldClose()` → bool
-  - `Platform.deinit()`
+- [ ] **2.2** Create `src/platform/platform.zig` — comptime target switch
+  ```zig
+  const platform = if (@import("builtin").target.cpu.arch == .wasm32)
+      @import("web.zig")
+  else
+      @import("native.zig");
+  ```
+  - Unified interface: `Platform.canvasWidth()`, `Platform.canvasHeight()`, etc.
 
 - [ ] **2.3** Create `src/platform/input.zig` — input state tracker
   - `current[256]` and `previous[256]` bool arrays
   - `isDown(key)`, `justPressed(key)`, `justReleased(key)`
   - `update()` — copies current to previous each frame
+  - On web: populated by exported `onKeyDown`/`onKeyUp`
   - See guide: [Chapter 5 — Input System](game-engine-guide.md#input-system)
 
-- [ ] **2.4** Hook up `src/main.zig` — basic game loop
-  - Open window → poll events → close on ESC or window close
-  - Print key presses to debug output to verify input works
+- [ ] **2.4** Create `web/index.html` + `web/engine.js` — browser host
+  - `index.html`: `<canvas>` element, load `engine.js`
+  - `engine.js`:
+    - Fetch and instantiate `.wasm` with `env` imports
+    - Set up WebGL2 context on the canvas
+    - Forward keyboard/mouse events to WASM exports
+    - Run `requestAnimationFrame` loop calling `instance.exports.update(dt)`
+
+- [ ] **2.5** Create `src/wasm_entry.zig` — WASM entry point
+  - Imports platform/web.zig
+  - Exports `init`, `update`, `onKeyDown`, `onKeyUp`, `onMouseMove`
+  - Basic game loop skeleton
+
+- [ ] **2.6** (Optional) Create `src/platform/native.zig` — native fallback
+  - macOS window via Objective-C runtime (can defer to later)
 
 ### Done when
-- A window opens with a title bar
-- ESC closes it
-- Key presses print to terminal
+- `zig build -Dtarget=wasm32-freestanding` produces a `.wasm` file
+- Opening `web/index.html` in a browser shows a colored canvas
+- Key presses logged to browser console via WASM→JS debug logging
 
 ---
 
-## Day 3 (Wed): Software Rasterizer
+## Day 3 (Wed): WebGL2 Renderer
 
-**Goal**: Render colored and textured triangles to the window.
+**Goal**: Render colored triangles in the browser via WebGL2.
 
 ### Tasks
 
-- [ ] **3.1** Create `src/renderer/framebuffer.zig`
-  - `Framebuffer` struct: `color: []u32`, `depth: []f32`, `width`, `height`
-  - `clear(color)` — fill color buffer, reset depth to 1.0
-  - `setPixel(x, y, color, depth)` — with depth test
-  - See guide: [Chapter 6 — Framebuffer](game-engine-guide.md#framebuffer)
+- [ ] **3.1** Create `src/renderer/webgl.zig` — WebGL2 bindings via JS bridge
+  - `extern "env"` for WebGL calls:
+    - `jsGlCreateBuffer()`, `jsGlBindBuffer()`, `jsGlBufferData()`
+    - `jsGlCreateShader()`, `jsGlShaderSource()`, `jsGlCompileShader()`
+    - `jsGlCreateProgram()`, `jsGlLinkProgram()`, `jsGlUseProgram()`
+    - `jsGlVertexAttribPointer()`, `jsGlEnableVertexAttribArray()`
+    - `jsGlDrawArrays()`, `jsGlDrawElements()`
+    - `jsGlUniformMatrix4fv()` — for passing Mat4 to shaders
+  - Zig-side wrapper: `Renderer.init()`, `Renderer.clear()`, `Renderer.drawMesh()`
 
-- [ ] **3.2** Create `src/renderer/rasterizer.zig`
-  - `drawTriangle(fb, v0, v1, v2)` — edge function rasterization
-  - Barycentric interpolation for color
-  - Depth testing per pixel
-  - See guide: [Chapter 6 — Triangle Rasterization](game-engine-guide.md#triangle-rasterization)
+- [ ] **3.2** Add WebGL setup to `web/engine.js`
+  - Create WebGL2 context from canvas
+  - Implement all `jsGl*` functions that the WASM imports
+  - Manage GL object handle mapping (WASM gets integer handles)
 
-- [ ] **3.3** Create `src/renderer/texture.zig`
-  - `Texture` struct: `pixels: []u32`, `width`, `height`
-  - `sampleNearest(u, v)` → u32 color
-  - `sampleBilinear(u, v)` → u32 color (stretch goal)
+- [ ] **3.3** Create `src/renderer/mesh.zig`
+  - `Mesh` struct: vertex data (position + color + normal), index data
+  - `createCube()`, `createQuad()` — hardcoded geometry generators
+  - Upload to GPU via WebGL buffer calls
 
-- [ ] **3.4** Blit framebuffer to macOS window
-  - Create a `CALayer` or `NSBitmapImageRep` and copy the color buffer into it
-  - Call this each frame after rendering
+- [ ] **3.4** Create shader strings (embedded in Zig via `comptime`)
+  - Vertex shader: MVP transform
+  - Fragment shader: vertex color output
+  - Pass as string pointers to JS for `gl.shaderSource()`
 
 - [ ] **3.5** Draw a 3D scene with MVP transform
-  - Apply model → view → projection → viewport pipeline
-  - Draw a spinning colored cube (hardcoded vertices)
-  - Use the `Mat4.perspective()` and `Mat4.lookAt()` from Day 1
-  - See guide: [Chapter 6 — The Rendering Pipeline](game-engine-guide.md#the-rendering-pipeline)
+  - Apply model → view → projection pipeline
+  - Draw a spinning colored cube
+  - Use `Mat4.perspective()` and `Mat4.lookAt()` from Day 1
+  - Pass MVP matrix to shader via `jsGlUniformMatrix4fv()`
 
 ### Done when
-- A spinning colored cube is visible in the window
-- Depth buffer works (back faces hidden)
+- A spinning colored cube is visible in the browser canvas
+- WebGL2 depth test works (back faces hidden)
 
 ---
 
@@ -140,30 +165,27 @@ zig build test   # all tests pass
   - WASD movement + mouse look
   - See guide: [Chapter 12 — Camera](game-engine-guide.md#camera)
 
-- [ ] **4.2** Create `src/assets/bmp.zig` — BMP image loader
-  - Parse 24-bit and 32-bit BMP files
-  - Return `Texture` struct
-  - Handle bottom-up row order and BGR→RGB conversion
-  - See guide: [Chapter 11 — BMP Loader](game-engine-guide.md#bmp-loader)
-
-- [ ] **4.3** Create `src/assets/obj.zig` — OBJ mesh loader
+- [ ] **4.2** Create `src/assets/obj.zig` — OBJ mesh loader
   - Parse `v`, `vt`, `vn`, `f` lines
   - Build vertex buffer (position + texcoord + normal) and index buffer
   - Handle `f v/vt/vn` format
+  - On web: JS `fetch()` loads file → passes `[]u8` to WASM via shared memory
   - See guide: [Chapter 11 — OBJ Loader](game-engine-guide.md#obj-loader)
 
-- [ ] **4.4** Create `src/assets/wav.zig` — WAV audio loader
-  - Parse RIFF header, fmt chunk, data chunk
-  - Return `Sound` struct with PCM samples as `[]f32`
-  - Support 16-bit PCM mono/stereo at 44100Hz
-  - See guide: [Chapter 11 — WAV Loader](game-engine-guide.md#wav-loader)
+- [ ] **4.3** Create `src/assets/image.zig` — image loader (BMP or procedural)
+  - Parse 24-bit/32-bit BMP or generate procedural textures (checkerboard)
+  - Return `Texture` struct
+  - Upload to WebGL via `jsGlTexImage2D()`
 
-- [ ] **4.5** Update main — load and render an OBJ model with a BMP texture
+- [ ] **4.4** Add texture support to WebGL renderer
+  - `jsGlCreateTexture()`, `jsGlBindTexture()`, `jsGlTexImage2D()`
+  - Update fragment shader to sample texture
+
+- [ ] **4.5** Update WASM entry — load and render an OBJ model with texture
   - Fly around it with the camera
 
 ### Done when
-- You can load a `.obj` file and a `.bmp` texture
-- The textured model renders correctly
+- A textured 3D model renders in the browser
 - Camera moves with WASD + mouse
 
 ---
@@ -227,10 +249,10 @@ zig build test   # all tests pass
   - `fillBuffer(output: []f32)` — mix all playing sounds into output buffer
   - See guide: [Chapter 10 — Audio Mixing](game-engine-guide.md#audio-mixing)
 
-- [ ] **6.2** Create `src/audio/macos_audio.zig`
-  - Core Audio output via `AudioQueueNewOutput` or `AudioUnit`
-  - Callback function calls `mixer.fillBuffer()`
-  - See guide: [Chapter 10 — Platform Audio Output](game-engine-guide.md#platform-audio-output)
+- [ ] **6.2** Create audio backend via JS bridge (Web Audio API)
+  - `extern "env"` for: `jsAudioPlay(sound_id, volume)`, `jsAudioStop(sound_id)`
+  - JS side: `AudioContext`, decode audio buffers, play/stop
+  - WAV parsing can happen in Zig or be delegated to JS `decodeAudioData()`
 
 - [ ] **6.3** Implement proper fixed timestep game loop
   - Fixed physics at 60Hz
@@ -260,7 +282,7 @@ zig build test   # all tests pass
 **Goal**: Build a playable demo that showcases every system.
 
 ### Demo Concept: **"Bouncing Arena"**
-A first-person scene where you walk around a small arena. Cubes spawn and bounce around with physics. Colliding with them plays a sound. A score counter tracks how many you've touched.
+A first-person scene in the browser where you walk around a small arena. Cubes spawn and bounce around with physics. Colliding with them plays a sound. A score counter tracks how many you've touched. Press **ESC** to pause / release mouse pointer lock.
 
 ### Tasks
 
@@ -269,31 +291,34 @@ A first-person scene where you walk around a small arena. Cubes spawn and bounce
   - Player: first-person camera, WASD + mouse, collides with walls
   - Spawner: every 2 seconds, spawn a colored cube at a random position with random velocity
   - Score: increment when player AABB touches a cube AABB, remove that cube
+  - **ESC key**: pause game / release pointer lock (important for web UX)
 
 - [ ] **7.2** Create game assets
-  - Hardcode simple geometry (cubes, floor quad) if OBJ loading works, or use loaded meshes
-  - Create or find a simple BMP texture (checkerboard is fine — can generate procedurally)
-  - Create or find a short WAV sound effect for pickup
+  - Hardcode simple geometry (cubes, floor quad) — procedural generation
+  - Procedural checkerboard texture (generated in Zig, uploaded to WebGL)
+  - Simple sound effect for pickup (short synthesized beep or loaded WAV)
 
-- [ ] **7.3** Wire everything together in `src/main.zig`
-  - Init: platform → renderer → audio → ECS world → spawn arena + player
-  - Loop: input → physics (fixed) → game logic → render → audio → present
-  - Cleanup: deinit everything
+- [ ] **7.3** Wire everything together
+  - WASM entry: `export fn init()` → renderer → audio → ECS world → spawn arena + player
+  - `export fn update(dt)` → input → physics (fixed) → game logic → render
+  - JS side: `requestAnimationFrame` loop, pointer lock on click, ESC to unlock
 
 - [ ] **7.4** Polish
   - Colored cubes (different color per cube)
   - Floor with checkerboard texture
-  - Score display in window title: `"zreal — Score: 42 | FPS: 60"`
+  - Score + FPS display via HTML overlay (JS reads exported state from WASM)
   - Gravity on cubes (accelerate downward, bounce off floor)
 
 - [ ] **7.5** Final testing
-  - Run the demo for 5+ minutes — no crashes
-  - Memory: verify arena reset works, no leaks (use Zig's `GeneralPurposeAllocator` in debug mode)
+  - Run the demo in browser for 5+ minutes — no crashes
+  - Test in Chrome + Firefox (both support WASM SIMD + WebGL2)
   - Performance: maintain 60fps
+  - ESC properly releases pointer lock
 
 ### Done when
-- The demo runs
+- The demo runs in the browser
 - You can walk around, cubes bounce, sounds play, score increments
+- ESC pauses / releases pointer lock
 - It doesn't crash
 
 ---
@@ -317,7 +342,7 @@ If you fall behind, cut in this order (least to most critical):
 4. **Simplify**: Skip lighting (flat-colored triangles)
 5. **Never cut**: Math library, window, rasterizer, game loop, camera
 
-The minimum viable demo is: window + input + software rasterizer + camera + hardcoded cubes + collision + game loop. Everything else is bonus.
+The minimum viable demo is: WASM + canvas + WebGL2 + input + camera + hardcoded cubes + collision + game loop. Everything else is bonus.
 
 ---
 
@@ -325,23 +350,28 @@ The minimum viable demo is: window + input + software rasterizer + camera + hard
 
 ```
 src/
-├── main.zig                    # entry point, game loop, wiring
+├── main.zig                    # native entry point
+├── wasm_entry.zig              # WASM entry point (export fn init/update/onKey...)
 ├── root.zig                    # library root
 ├── math/
-│   ├── vec.zig                 # Vec2, Vec3, Vec4 (SIMD)
+│   ├── scalar.zig              # Scalar type alias
+│   ├── vec2.zig                # Vec2 (SIMD)
+│   ├── vec3.zig                # Vec3 (SIMD, @Vector(4) with w=0)
+│   ├── vec4.zig                # Vec4 (SIMD)
 │   ├── mat.zig                 # Mat4
 │   └── quat.zig                # Quaternion
 ├── memory/
 │   ├── arena.zig               # Arena allocator
 │   └── pool.zig                # Pool allocator
 ├── platform/
-│   ├── platform.zig            # Cross-platform interface
-│   ├── macos.zig               # macOS window + events
+│   ├── platform.zig            # comptime target switch (web vs native)
+│   ├── web.zig                 # WASM ↔ JS bridge (extern + export)
+│   ├── native.zig              # macOS/Linux/Windows (optional)
 │   └── input.zig               # Input state tracking
 ├── renderer/
-│   ├── framebuffer.zig         # Color + depth buffer
-│   ├── rasterizer.zig          # Triangle rasterization
-│   ├── texture.zig             # Texture sampling
+│   ├── webgl.zig               # WebGL2 backend via JS bridge
+│   ├── mesh.zig                # Mesh data + procedural geometry
+│   ├── texture.zig             # Texture management
 │   └── camera.zig              # Camera + projection
 ├── ecs/
 │   ├── world.zig               # Entity storage + components
@@ -351,12 +381,13 @@ src/
 │   ├── rigidbody.zig           # Rigid body + integration
 │   └── physics_system.zig      # Broad/narrow phase + response
 ├── audio/
-│   ├── mixer.zig               # Audio mixing
-│   └── macos_audio.zig         # Core Audio output
+│   └── mixer.zig               # Audio mixing (Web Audio via JS bridge)
 ├── assets/
-│   ├── bmp.zig                 # BMP image loader
-│   ├── obj.zig                 # OBJ mesh loader
-│   └── wav.zig                 # WAV audio loader
+│   ├── image.zig               # BMP loader / procedural textures
+│   └── obj.zig                 # OBJ mesh loader
 └── game/
     └── demo.zig                # Demo game logic
+web/
+├── index.html                  # HTML host page with <canvas>
+└── engine.js                   # JS glue: WASM loader, WebGL, events, RAF loop
 ```

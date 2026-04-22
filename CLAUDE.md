@@ -41,28 +41,61 @@ The engine is built bottom-up in this order:
 ## Build & Run
 
 ```bash
-zig build          # build the engine
-zig build run      # run the executable
-zig build test     # run all tests
+# Native desktop
+zig build              # build the engine (native)
+zig build run          # run the executable
+zig build test         # run all tests
+
+# Web (WASM)
+zig build -Dtarget=wasm32-freestanding   # build WASM module
+# Then serve web/ directory with any HTTP server
 ```
 
 ## Project Structure
 
 ```
 src/
-  main.zig         # entry point
-  root.zig         # library root (public API)
-  math/            # SIMD math library
-  memory/          # custom allocators
-  platform/        # OS window/input layer
-  renderer/        # software rasterizer → GPU backend
-  ecs/             # entity-component-system
-  physics/         # collision & dynamics
-  audio/           # audio mixer
-  assets/          # file format loaders
-  scene/           # scene graph & cameras
+  main.zig             # native entry point
+  root.zig             # library root (public API)
+  wasm_entry.zig       # WASM entry point — export fn update/render/onKey etc.
+  math/                # SIMD math library (platform-agnostic, uses WASM SIMD)
+  memory/              # custom allocators (works on WASM linear memory)
+  platform/
+    platform.zig       # comptime target switch
+    web.zig            # WASM ↔ JS bridge (extern "env" imports + exports)
+    native.zig         # OS-specific: Cocoa/X11/Win32
+    input.zig          # input state tracking (shared)
+  renderer/
+    webgl.zig          # WebGL2 backend (via JS bridge)
+    software.zig       # software rasterizer (native fallback)
+    camera.zig         # camera + projection
+  ecs/                 # entity-component-system
+  physics/             # collision & dynamics
+  audio/               # audio mixer (Web Audio API on web)
+  assets/              # file format loaders
+  scene/               # scene graph & cameras
+web/
+  index.html           # HTML host page
+  engine.js            # JS glue: WASM loader, WebGL setup, event forwarding
 docs/
-  game-engine-guide.md   # comprehensive engineering guide
+  game-engine-guide.md # comprehensive engineering guide
+```
+
+## WASM Architecture
+
+```
+Browser                          WASM (Zig)
+┌─────────────┐                 ┌──────────────────┐
+│ engine.js   │  extern "env"   │  wasm_entry.zig   │
+│             │ ◄──────────────►│                    │
+│ - WebGL ctx │  export fn      │  - game logic      │
+│ - events    │                 │  - math (SIMD)     │
+│ - audio ctx │                 │  - physics         │
+│ - RAF loop  │                 │  - ECS             │
+└─────────────┘                 └──────────────────────┘
+
+JS calls: export fn update(dt), export fn onKeyDown(key), export fn init()
+Zig calls: extern fn jsGlClear(), extern fn jsDrawArrays(), extern fn jsPlaySound()
 ```
 
 ## Documentation
