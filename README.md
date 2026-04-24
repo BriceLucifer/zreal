@@ -37,10 +37,12 @@ git clone https://github.com/user/zreal && cd zreal
 # Build WASM
 zig build wasm
 
-# Serve locally
-cd web && python3 -m http.server 8080
+# Serve locally (pick one)
+npx serve web
+# or
+bunx serve web
 
-# Open http://localhost:8080
+# Open http://localhost:3000
 ```
 
 ### Other Build Targets

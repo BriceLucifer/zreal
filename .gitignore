@@ -1,3 +1,21 @@
-zig-out
+# Zig build artifacts
+zig-out/
+.zig-cache/
+
+# Build outputs
+*.wasm
+*.ppm
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Zig package manager
 build.zig.zon
-.zig-cache
